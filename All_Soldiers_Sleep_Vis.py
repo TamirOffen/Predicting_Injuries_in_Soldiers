@@ -30,152 +30,212 @@ def display_both(soldier_id, week_num, save_as_png=False, output_folder=""):
 
     fig, axes = plt.subplots(rows, cols, figsize=(30, 5 * rows), sharex=False, sharey=False)
 
-    # Ensure axes is always iterable
-    if rows == 1:
+    # Ensure axes is always a 2D array
+    if rows == 1 and cols == 1:
+        axes = [[axes]]  # Convert to a 2D array
+    elif rows == 1:
         axes = [axes]  # Convert to a list of length 1
-    elif num_days == 1:
-        axes = [axes]  # Also handle the case where num_days == 1
+    elif cols == 1:
+        axes = [[ax] for ax in axes]  # Convert to a list of lists
 
     for i, day in enumerate(days):
-        # print(type(axes))
         ax1, ax2 = axes[i]
 
-        # Visualization from visualize_week (left side)
-        filtered_df = user_sleep_readable[soldier_id]['weeks'][week_num][
-            user_sleep_readable[soldier_id]['weeks'][week_num]['datetime'].dt.date == day
+        # Visualization from the first function (left side)
+        to_plot = soldiers_unprocessed[soldier_id]['sleep']['sleep'][week_num].copy()
+        to_plot['datetime'] = pd.to_datetime(to_plot['Date']) + pd.to_timedelta(to_plot['Hour'],
+                                                                                unit='h') + pd.to_timedelta(
+            to_plot['Minute'], unit='m')
+        to_plot.drop_duplicates(subset=['datetime'], inplace=True)
+        to_plot = to_plot[
+            to_plot['datetime'].dt.date == day
             ]
-        if week_num in sleep_hr_dict[soldier_id]['weeks'].keys():
+
+        if soldier_id in sleep_hr_dict and week_num in sleep_hr_dict[soldier_id]['weeks'] and not \
+        sleep_hr_dict[soldier_id]['weeks'][week_num].empty:
             hr_steps_df = sleep_hr_dict[soldier_id]['weeks'][week_num]
-        else:
-            hr_steps_df = pd.DataFrame()
-        if hr_steps_df.empty:
-            combined_df = filtered_df.copy()
-            combined_df['pulse'] = pd.Series([pd.NA] * len(combined_df))
-            combined_df['steps'] = pd.Series([pd.NA] * len(combined_df))
-        # print(hr_steps_df)
-        else:
+            # Perform the merge with steps data
             combined_df = pd.merge(
-                filtered_df,
+                to_plot,
                 hr_steps_df,
                 on='datetime',
-                how='left'
+                how='left'  # left join, keeps all the sleep data; missing data will be NaN.
             )
-            combined_df = combined_df.drop(columns=['Hour', 'Min', 'startTimeDate'], errors='ignore')
+        else:
+            # If no steps data, use final_df only
+            combined_df = to_plot.copy()
+            combined_df['pulse'] = None  # Create a 'steps' column with None or NaN for missing steps data
 
-        for j, row in combined_df.iterrows():
-            if row['SleepState'] == 1:
-                color = 'red'  # sleeping
-            elif row['SleepState'] == 0:
-                color = 'green'  # awake
+        to_plot = combined_df
+        for j, row in to_plot.iterrows():
+            if row['SleepState'] == '?':
+                ax1.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color='black')
+            elif row['SleepState'] == 'Awake':
+                ax1.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color='green')
             else:
-                color = 'yellow'  # not known
+                ax1.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color='red')
 
-            ax1.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color=color)
-
+        # Customize the plot for sleep state
         ax1.set_xlabel('Time')
+        ax1.set_ylabel('')
         ax1.set_yticks([0, 1])
         ax1.set_yticklabels(['', ''])
         ax1.set_ylim(0, 1)
+        ax1.tick_params(axis='y')
         ax1.set_title(day.strftime('%Y-%m-%d'))
+
+        # Format x-axis for better readability
         ax1.tick_params(axis='x', rotation=45)
 
-        ax1_twin = ax1.twinx()
-        ax1_twin.grid(False)
-        if not combined_df['pulse'].isna().all():
-            ax1_twin.plot(combined_df['datetime'], combined_df['pulse'], color='blue', label='Heart Rate',
-                          linestyle='-')
-        ax1_twin.tick_params(axis='y', labelcolor='blue')
+        # Create a secondary y-axis for heart rate (hr) and steps
+        ax1_1 = ax1.twinx()
+        ax1_1.grid(False)  # Disable grid lines for ax2
+        ax1_1.spines['top'].set_visible(True)  # Ensure the top spine is visible
+        ax1_1.spines['left'].set_visible(True)  # Ensure the left spine is visible
+        ax1_1.spines['right'].set_color('blue')  # Set right spine color for clarity
+        ax1_1.spines['right'].set_visible(True)  # Ensure the right spine is visible
 
-        # Create a third y-axis for steps
-        ax3 = ax1.twinx()
-        ax3.grid(False)
-        ax3.spines['right'].set_position(('outward', 40))  # Offset the third y-axis to avoid overlap
-        ax3.spines['right'].set_visible(True)  # Ensure the right spine is visible
-
-        # Plot steps data
-        if not combined_df['steps'].isna().all():
-            ax3.plot(combined_df['datetime'], combined_df['steps'], color='purple', label='Steps', linestyle='--')
-        ax3.set_ylabel('', color='purple')
-        ax3.tick_params(axis='y', labelcolor='purple')
+        # Plot heart rate data
+        ax1_1.plot(to_plot['datetime'], to_plot['pulse'], color='blue', label='Heart Rate', linestyle='-')
+        ax1_1.set_ylabel('', color='blue')
+        ax1_1.tick_params(axis='y', labelcolor='blue')
 
         # Add legends
-        lines, labels = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        lines3, labels3 = ax3.get_legend_handles_labels()
-        # ax1.legend(lines + lines2 + lines3, labels + labels2 + labels3, loc='upper left')
         awake_patch = plt.Line2D([0], [0], color='green', lw=4, label='Awake')
         sleeping_patch = plt.Line2D([0], [0], color='red', lw=4, label='Sleeping')
-        unknown_patch = plt.Line2D([0], [0], color='yellow', lw=4, label='Unknown')
+        unknown_patch = plt.Line2D([0], [0], color='black', lw=4, label='Unknown')
+        pulse_line = plt.Line2D([0], [0], color='blue', lw=1, label='Pulse')
 
-        ax1.legend([awake_patch, sleeping_patch, unknown_patch] + lines + lines2 + lines3,
-                   ['Awake', 'Sleeping', 'Unknown'] + labels + labels2 + labels3, loc='upper left')
+        ax1.legend([awake_patch, sleeping_patch, unknown_patch, pulse_line], ['Awake', 'Sleeping', 'Unknown', 'Pulse'],
+                   loc='upper left')
 
-        # Visualization from visualize_sleep_imputation (right side)
-        filtered_df_copy = filtered_df.copy()
-        filtered_df_copy.drop_duplicates(subset=['datetime'], inplace=True)
+        if i == 0:
+            ax1.set_title(f"Sleep States before Processing\n\n{day}", fontsize=16)
 
-        pre_df = soldiers_unprocessed[soldier_id]['sleep']['sleep'][week_num].copy()
-        pre_df['datetime'] = pd.to_datetime(pre_df['Date']) + pd.to_timedelta(pre_df['Hour'],
-                                                                              unit='h') + pd.to_timedelta(
-            pre_df['Minute'], unit='m')
-        pre_df.drop_duplicates(subset=['datetime'], inplace=True)
-        combined_df = pd.merge(
-            filtered_df_copy,
-            pre_df,
-            on='datetime',
-            how='left'
-        )
+        ###############
+        # Visualization from the second function (right side)
+        # Filter the DataFrame for a single day (date_to_filter)
+        filtered_df_imputed = user_sleep_readable[soldier_id]['weeks'][week_num][
+            user_sleep_readable[soldier_id]['weeks'][week_num]['datetime'].dt.date == day
+            ].copy()
+        filtered_df_imputed.drop_duplicates(subset=['datetime'], inplace=True)
 
-        for idx, row in combined_df.iterrows():
-            if row['SleepState_y'] == 'Awake':
-                combined_df.at[idx, 'SleepState_y'] = 0
-            elif row['SleepState_y'] in ['Light Sleep', 'Deep Sleep']:
-                combined_df.at[idx, 'SleepState_y'] = 1
+        filtered_df_raw = soldiers_unprocessed[soldier_id]['sleep']['sleep'][week_num].copy()
+        filtered_df_raw['datetime'] = pd.to_datetime(filtered_df_raw['Date']) + pd.to_timedelta(filtered_df_raw['Hour'],
+                                                                                                unit='h') + pd.to_timedelta(
+            filtered_df_raw['Minute'], unit='m')
+        filtered_df_raw.drop_duplicates(subset=['datetime'], inplace=True)
+        filtered_df_raw = filtered_df_raw[filtered_df_raw['datetime'].dt.date == day]
+        filtered_df_raw.loc[filtered_df_raw['SleepState'].isin(['Light Sleep', 'Deep Sleep']), 'SleepState'] = 1
+        filtered_df_raw.loc[filtered_df_raw['SleepState'] == 'Awake', 'SleepState'] = 0
 
-        combined_df['imputation'] = (combined_df['SleepState_x'] != 2) & (
-                    combined_df['SleepState_x'] != combined_df['SleepState_y'])
+        # Step 1: Merge the DataFrames on 'datetime'
+        merged_df = pd.merge(filtered_df_raw[['datetime', 'SleepState']],
+                             filtered_df_imputed[['datetime', 'SleepState']],
+                             on='datetime',
+                             suffixes=('_raw', '_imputed'))
 
-        if hr_steps_df.empty:
-            combined_hr_df = combined_df.copy()
-            combined_hr_df['pulse'] = pd.Series([pd.NA] * len(combined_hr_df))
-        else:
-            combined_hr_df = pd.merge(
-                combined_df,
+        # Step 2: Define the logic for the 'state' column
+        def determine_state(row):
+            raw_state = row['SleepState_raw']
+            imputed_state = row['SleepState_imputed']
+
+            if raw_state == 1:
+                return 0  # sleeping original
+            elif raw_state == 0:
+                return 2  # awake original
+            elif imputed_state == 1:
+                return 1  # sleeping imputed
+            elif imputed_state == 0:
+                return 3  # awake imputed
+            elif imputed_state == 2:
+                return 4  # still don't know
+
+        # Step 3: Apply the logic to create the new column 'state'
+        merged_df['state'] = merged_df.apply(determine_state, axis=1)
+
+        # Step 4: Create the final DataFrame with 'datetime' and 'state'
+        final_df = merged_df[['datetime', 'state']]
+
+        # Check if the soldier_id exists in the sleep_hr_dict and if the week_num exists for that soldier
+        if soldier_id in sleep_hr_dict and week_num in sleep_hr_dict[soldier_id]['weeks'] and not \
+        sleep_hr_dict[soldier_id]['weeks'][week_num].empty:
+            hr_steps_df = sleep_hr_dict[soldier_id]['weeks'][week_num]
+
+            # Perform the merge with steps data
+            combined_df = pd.merge(
+                final_df,
                 hr_steps_df,
                 on='datetime',
-                how='left'
+                how='left'  # left join, keeps all the sleep data; missing data will be NaN.
             )
+        else:
+            # If no steps data, use final_df only
+            combined_df = final_df.copy()
+            combined_df['pulse'] = None  # Create a 'steps' column with None or NaN for missing steps data
 
-        for j, row in combined_hr_df.iterrows():
-            if row['SleepState_x'] == 2:
-                ax2.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color='black')
-            elif not row['imputation']:
-                ax2.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color='blue')
-            elif row['imputation']:
-                ax2.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color='orange')
+        to_plot = combined_df  # sleep data in 'SleepState', hr data in 'pulse', steps count data in 'steps'
+        # Plot sleep state as blocks of color
+        # awake/0 in green, sleeping/1 in red, unknown/2 in yellow
+        for j, row in to_plot.iterrows():
+            if row['state'] == 0:
+                color = 'red'  # sleeping original
+            elif row['state'] == 1:
+                color = 'lightcoral'  # sleeping imputed (lighter red)
+            elif row['state'] == 2:
+                color = 'green'  # awake original
+            elif row['state'] == 3:
+                color = 'lightgreen'  # awake imputed (lighter green)
+            else:  # SleepState == 4
+                color = 'black'  # still don't know
 
+            # Plot with the color based on the SleepState
+            ax2.fill_between([row['datetime'], row['datetime'] + timedelta(minutes=1)], 0, 1, color=color)
+
+        # Customize the plot for sleep state
         ax2.set_xlabel('Time')
+        ax2.set_ylabel('')
         ax2.set_yticks([0, 1])
         ax2.set_yticklabels(['', ''])
         ax2.set_ylim(0, 1)
+        ax2.tick_params(axis='y')
         ax2.set_title(day.strftime('%Y-%m-%d'))
+
+        # Format x-axis for better readability
         ax2.tick_params(axis='x', rotation=45)
 
-        ax2_twin = ax2.twinx()
-        ax2_twin.grid(False)
-        if not combined_hr_df['pulse'].isna().all():
-            ax2_twin.plot(combined_hr_df['datetime'], combined_hr_df['pulse'], color='yellow', label='Heart Rate',
-                          linestyle='-')
-        ax2_twin.tick_params(axis='y', labelcolor='black')
+        # Create a secondary y-axis for heart rate (hr) and steps
+        ax2_1 = ax2.twinx()
+        ax2_1.grid(False)  # Disable grid lines for ax2
+        ax2_1.spines['top'].set_visible(True)  # Ensure the top spine is visible
+        ax2_1.spines['left'].set_visible(True)  # Ensure the left spine is visible
+        ax2_1.spines['right'].set_color('blue')  # Set right spine color for clarity
+        ax2_1.spines['right'].set_visible(True)  # Ensure the right spine is visible
 
-        imp_patch = plt.Line2D([0], [0], color='orange', lw=4, label='New')
-        no_imp_patch = plt.Line2D([0], [0], color='blue', lw=4, label='Original')
-        no_info_patch = plt.Line2D([0], [0], color='black', lw=4, label='Not Enough Info')
-        hr_patch = plt.Line2D([0], [0], color='yellow', lw=1, label='Heart Rate')
-        ax2.legend([no_imp_patch, imp_patch, no_info_patch, hr_patch],
-                   ['Original', 'New', 'Not Enough Info', 'Heart Rate'], loc='upper left')
+        # Plot heart rate data
+        ax2_1.plot(to_plot['datetime'], to_plot['pulse'], color='blue', label='Heart Rate', linestyle='-')
+        ax2_1.set_ylabel('', color='blue')
+        ax2_1.tick_params(axis='y', labelcolor='blue')
 
-    fig.suptitle(f'Sleep & Imputation Visualization for Soldier \'{soldier_id}\'\nweek no. {week_num}', fontsize=16)
+        # Define the patches for the legend
+        awake_patch = plt.Line2D([0], [0], color='green', lw=4, label='Awake Original')
+        sleeping_patch = plt.Line2D([0], [0], color='red', lw=4, label='Sleeping Original')
+        awake_imputed_patch = plt.Line2D([0], [0], color='lightgreen', lw=4, label='Awake Imputed')
+        sleeping_imputed_patch = plt.Line2D([0], [0], color='lightcoral', lw=4, label='Sleeping Imputed')
+        unknown_patch = plt.Line2D([0], [0], color='black', lw=4, label='Not Enough Info')
+        pulse_line = plt.Line2D([0], [0], color='blue', lw=1, label='Pulse')
+
+        # Combine everything in the legend, including the new patches
+        ax2.legend(
+            [awake_patch, sleeping_patch, awake_imputed_patch, sleeping_imputed_patch, unknown_patch, pulse_line],
+            ['Awake Original', 'Sleeping Original', 'Awake Imputed', 'Sleeping Imputed', 'Not Enough Info', 'Pulse'],
+            loc='upper left'
+        )
+
+        if i == 0:
+            ax2.set_title(f"Sleep States after Processing\n\n{day}", fontsize=16)
+
+    fig.suptitle(f'Sleep & Imputation Visualization for Soldier \'{soldier_id}\'\nweek no. {week_num}', fontsize=20)
     plt.tight_layout(rect=[0, 0.03, 1, 0.98])
     if save_as_png:
         directory = f'{output_folder}/{soldier_id}'
